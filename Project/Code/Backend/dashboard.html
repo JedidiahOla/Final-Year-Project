@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WaterNode — Water Quality Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        /* ------------------------------------------------------------------ */
+        /* Reset and base */
+        /* ------------------------------------------------------------------ */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:          #0f1117;
+            --bg2:         #1a1d27;
+            --bg3:         #222638;
+            --border:      #2e3248;
+            --text:        #e2e8f0;
+            --text-dim:    #718096;
+            --green:       #48bb78;
+            --yellow:      #ecc94b;
+            --orange:      #ed8936;
+            --red:         #fc8181;
+            --blue:        #63b3ed;
+            --turb-color:  #63b3ed;
+            --tds-color:   #68d391;
+            --temp-color:  #f6ad55;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            min-height: 100vh;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Layout */
+        /* ------------------------------------------------------------------ */
+        header {
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        header .subtitle {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        #connection-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        #connection-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            transition: background 0.3s;
+        }
+
+        #connection-dot.connected { background: var(--green); }
+        #connection-dot.error     { background: var(--red); }
+
+        main {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px 16px;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: auto auto auto auto;
+            gap: 16px;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Cards */
+        /* ------------------------------------------------------------------ */
+        .card {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+
+        .card-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Alert status banner — spans full width */
+        /* ------------------------------------------------------------------ */
+        #alert-banner {
+            grid-column: 1 / -1;
+            border-radius: 8px;
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border: 1px solid var(--border);
+            transition: background 0.4s, border-color 0.4s;
+        }
+
+        #alert-banner.level-0 { background: rgba(72,187,120,0.1); border-color: var(--green); }
+        #alert-banner.level-1 { background: rgba(236,201,75,0.12); border-color: var(--yellow); }
+        #alert-banner.level-2 { background: rgba(237,137,54,0.12); border-color: var(--orange); }
+        #alert-banner.level-3 { background: rgba(252,129,129,0.15); border-color: var(--red); }
+
+        #alert-label {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        #alert-banner.level-0 #alert-label { color: var(--green); }
+        #alert-banner.level-1 #alert-label { color: var(--yellow); }
+        #alert-banner.level-2 #alert-label { color: var(--orange); }
+        #alert-banner.level-3 #alert-label { color: var(--red); }
+
+        #alert-detail { font-size: 12px; color: var(--text-dim); }
+        #alert-time   { font-size: 11px; color: var(--text-dim); text-align: right; }
+
+        /* ------------------------------------------------------------------ */
+        /* Metric cards (turbidity, TDS, temperature, battery) */
+        /* ------------------------------------------------------------------ */
+        .metric-card {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .metric-value {
+            font-size: 32px;
+            font-weight: 700;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .metric-unit {
+            font-size: 13px;
+            color: var(--text-dim);
+            font-weight: 400;
+        }
+
+        .metric-baseline {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .metric-cusum {
+            margin-top: 8px;
+            height: 4px;
+            background: var(--bg3);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .metric-cusum-bar {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.5s ease, background 0.3s;
+        }
+
+        .metric-status {
+            font-size: 11px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        .status-normal  { color: var(--green); }
+        .status-watch   { color: var(--yellow); }
+        .status-warning { color: var(--orange); }
+        .status-alarm   { color: var(--red); }
+
+        /* Battery card spans 1 column */
+        #battery-card .metric-value { font-size: 24px; }
+
+        /* ------------------------------------------------------------------ */
+        /* Charts — span full width */
+        /* ------------------------------------------------------------------ */
+        .chart-card {
+            grid-column: 1 / -1;
+            height: 200px;
+        }
+
+        .chart-card canvas {
+            width: 100% !important;
+            height: 160px !important;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Alert log — spans full width */
+        /* ------------------------------------------------------------------ */
+        #alert-log-card {
+            grid-column: 1 / -1;
+        }
+
+        #alert-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        #alert-table th {
+            text-align: left;
+            padding: 6px 10px;
+            color: var(--text-dim);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        #alert-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--bg3);
+            vertical-align: top;
+        }
+
+        #alert-table tr:last-child td { border-bottom: none; }
+
+        .alert-level-badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .badge-0 { background: rgba(72,187,120,0.2);  color: var(--green); }
+        .badge-1 { background: rgba(236,201,75,0.2);  color: var(--yellow); }
+        .badge-2 { background: rgba(237,137,54,0.2);  color: var(--orange); }
+        .badge-3 { background: rgba(252,129,129,0.2); color: var(--red); }
+
+        /* ------------------------------------------------------------------ */
+        /* Faults panel */
+        /* ------------------------------------------------------------------ */
+        #faults-card { grid-column: 1 / -1; }
+
+        #fault-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .fault-tag {
+            background: rgba(252,129,129,0.15);
+            color: var(--red);
+            border: 1px solid rgba(252,129,129,0.3);
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .no-faults {
+            color: var(--green);
+            font-size: 12px;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Footer stats bar */
+        /* ------------------------------------------------------------------ */
+        #stats-bar {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 24px;
+            padding: 10px 0;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        #stats-bar span b { color: var(--text); }
+
+        /* ------------------------------------------------------------------ */
+        /* Loading skeleton */
+        /* ------------------------------------------------------------------ */
+        .skeleton {
+            background: linear-gradient(90deg, var(--bg3) 25%, var(--bg2) 50%, var(--bg3) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            border-radius: 4px;
+            height: 32px;
+        }
+
+        @keyframes shimmer {
+            0%   { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ========================================================================= -->
+<!-- HEADER -->
+<!-- ========================================================================= -->
+<header>
+    <div>
+        <h1>💧 WaterNode Dashboard</h1>
+        <div class="subtitle">
+            Low-Cost Water Quality Monitoring — Kavrepalanchok, Nepal (Lab Prototype)
+        </div>
+    </div>
+    <div id="connection-indicator">
+        <div id="connection-dot"></div>
+        <span id="connection-text">Connecting...</span>
+    </div>
+</header>
+
+<!-- ========================================================================= -->
+<!-- MAIN GRID -->
+<!-- ========================================================================= -->
+<main>
+
+    <!-- Alert Status Banner -->
+    <div id="alert-banner" class="level-0">
+        <div>
+            <div id="alert-label">LOADING...</div>
+            <div id="alert-detail">Waiting for data</div>
+        </div>
+        <div id="alert-time">—</div>
+    </div>
+
+    <!-- Turbidity Card -->
+    <div class="card metric-card" id="turb-card">
+        <div class="card-title">Turbidity</div>
+        <div>
+            <span class="metric-value" id="turb-value" style="color: var(--turb-color)">—</span>
+            <span class="metric-unit">NTU</span>
+        </div>
+        <div class="metric-baseline" id="turb-baseline">Baseline: —</div>
+        <div class="metric-cusum">
+            <div class="metric-cusum-bar" id="turb-cusum-bar"
+                 style="width:0%; background: var(--turb-color)"></div>
+        </div>
+        <div class="metric-status status-normal" id="turb-status">Normal</div>
+    </div>
+
+    <!-- TDS Card -->
+    <div class="card metric-card" id="tds-card">
+        <div class="card-title">TDS (Total Dissolved Solids)</div>
+        <div>
+            <span class="metric-value" id="tds-value" style="color: var(--tds-color)">—</span>
+            <span class="metric-unit">mg/L</span>
+        </div>
+        <div class="metric-baseline" id="tds-baseline">Baseline: —</div>
+        <div class="metric-cusum">
+            <div class="metric-cusum-bar" id="tds-cusum-bar"
+                 style="width:0%; background: var(--tds-color)"></div>
+        </div>
+        <div class="metric-status status-normal" id="tds-status">Normal</div>
+    </div>
+
+    <!-- Temperature Card -->
+    <div class="card metric-card" id="temp-card">
+        <div class="card-title">Water Temperature</div>
+        <div>
+            <span class="metric-value" id="temp-value" style="color: var(--temp-color)">—</span>
+            <span class="metric-unit">°C</span>
+        </div>
+        <div class="metric-baseline" id="temp-baseline">Baseline: —</div>
+        <div class="metric-cusum">
+            <div class="metric-cusum-bar" id="temp-cusum-bar"
+                 style="width:0%; background: var(--temp-color)"></div>
+        </div>
+        <div class="metric-status status-normal" id="temp-status">Normal</div>
+    </div>
+
+    <!-- Turbidity Chart -->
+    <div class="card chart-card">
+        <div class="card-title">Turbidity Trend (24h)</div>
+        <canvas id="turb-chart"></canvas>
+    </div>
+
+    <!-- TDS Chart -->
+    <div class="card chart-card">
+        <div class="card-title">TDS Trend (24h)</div>
+        <canvas id="tds-chart"></canvas>
+    </div>
+
+    <!-- Temperature Chart -->
+    <div class="card chart-card">
+        <div class="card-title">Temperature Trend (24h)</div>
+        <canvas id="temp-chart"></canvas>
+    </div>
+
+    <!-- Faults Panel -->
+    <div class="card" id="faults-card">
+        <div class="card-title">Active Faults</div>
+        <div id="fault-list"><span class="no-faults">No faults detected</span></div>
+    </div>
+
+    <!-- Alert Log -->
+    <div class="card" id="alert-log-card">
+        <div class="card-title">Recent Alerts</div>
+        <table id="alert-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Parameter</th>
+                    <th>Level</th>
+                    <th>Value</th>
+                    <th>Baseline</th>
+                    <th>CUSUM Score</th>
+                    <th>SMS</th>
+                </tr>
+            </thead>
+            <tbody id="alert-tbody">
+                <tr><td colspan="7" style="color:var(--text-dim); text-align:center;
+                    padding:16px">No alerts logged yet</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Stats Bar -->
+    <div id="stats-bar">
+        <span>Node: <b id="stat-node">—</b></span>
+        <span>Total Readings: <b id="stat-count">—</b></span>
+        <span>Battery: <b id="stat-battery">—</b></span>
+        <span>Season: <b id="stat-season">—</b></span>
+        <span>Last Update: <b id="stat-updated">—</b></span>
+    </div>
+
+</main>
+
+<!-- ========================================================================= -->
+<!-- JAVASCRIPT -->
+<!-- ========================================================================= -->
+<script>
+const NODE_ID = "{{ node_id }}";
+const POLL_INTERVAL = {{ poll_interval }} * 1000;
+
+// Chart instances
+let turbChart, tdsChart, tempChart;
+let historyLoaded = false;
+
+// ============================================================================
+// Chart initialisation
+// ============================================================================
+function initCharts() {
+    const commonOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 300 },
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                callbacks: {
+                    label: ctx => ` ${ctx.parsed.y !== null
+                        ? ctx.parsed.y.toFixed(2) : 'null'}`
+                }
+            }
+        },
+        scales: {
+            x: {
+                ticks: { color: '#718096', maxTicksLimit: 8, maxRotation: 0 },
+                grid: { color: 'rgba(46,50,72,0.8)' }
+            },
+            y: {
+                ticks: { color: '#718096' },
+                grid: { color: 'rgba(46,50,72,0.8)' },
+                beginAtZero: true
+            }
+        }
+    };
+
+    turbChart = new Chart(document.getElementById('turb-chart'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+            { label: 'Turbidity (NTU)', data: [], borderColor: '#63b3ed',
+              backgroundColor: 'rgba(99,179,237,0.08)', borderWidth: 2,
+              pointRadius: 2, tension: 0.3, fill: true },
+            { label: 'Baseline', data: [], borderColor: 'rgba(99,179,237,0.3)',
+              borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
+            { label: 'WHO Limit', data: [], borderColor: 'rgba(252,129,129,0.5)',
+              borderWidth: 1, borderDash: [2,4], pointRadius: 0 }
+        ]},
+        options: { ...commonOptions }
+    });
+
+    tdsChart = new Chart(document.getElementById('tds-chart'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+            { label: 'TDS (mg/L)', data: [], borderColor: '#68d391',
+              backgroundColor: 'rgba(104,211,145,0.08)', borderWidth: 2,
+              pointRadius: 2, tension: 0.3, fill: true },
+            { label: 'Baseline', data: [], borderColor: 'rgba(104,211,145,0.3)',
+              borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
+            { label: 'WHO Limit', data: [], borderColor: 'rgba(252,129,129,0.5)',
+              borderWidth: 1, borderDash: [2,4], pointRadius: 0 }
+        ]},
+        options: { ...commonOptions }
+    });
+
+    tempChart = new Chart(document.getElementById('temp-chart'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+            { label: 'Temperature (°C)', data: [], borderColor: '#f6ad55',
+              backgroundColor: 'rgba(246,173,85,0.08)', borderWidth: 2,
+              pointRadius: 2, tension: 0.3, fill: true },
+            { label: 'Baseline', data: [], borderColor: 'rgba(246,173,85,0.3)',
+              borderWidth: 1, borderDash: [4,4], pointRadius: 0 }
+        ]},
+        options: { ...commonOptions }
+    });
+}
+
+// ============================================================================
+// Update charts with history data
+// ============================================================================
+async function loadHistory() {
+    try {
+        const res = await fetch(`/api/history?node_id=${NODE_ID}&hours=24`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (!data.labels || data.labels.length === 0) return;
+
+        const n = data.labels.length;
+        const baselineFill = (val) => new Array(n).fill(val);
+
+        // Turbidity
+        turbChart.data.labels = data.labels;
+        turbChart.data.datasets[0].data = data.turbidity;
+        turbChart.data.datasets[1].data = baselineFill(data.baselines.turbidity_mean);
+        turbChart.data.datasets[2].data = baselineFill(data.baselines.turbidity_who);
+        turbChart.update('none');
+
+        // TDS
+        tdsChart.data.labels = data.labels;
+        tdsChart.data.datasets[0].data = data.tds;
+        tdsChart.data.datasets[1].data = baselineFill(data.baselines.tds_mean);
+        tdsChart.data.datasets[2].data = baselineFill(data.baselines.tds_who);
+        tdsChart.update('none');
+
+        // Temperature
+        tempChart.data.labels = data.labels;
+        tempChart.data.datasets[0].data = data.temperature;
+        tempChart.data.datasets[1].data = baselineFill(data.baselines.temp_mean);
+        tempChart.update('none');
+
+        historyLoaded = true;
+    } catch(e) {
+        console.error('History fetch failed:', e);
+    }
+}
+
+// ============================================================================
+// Poll latest status and update UI
+// ============================================================================
+async function pollLatest() {
+    try {
+        const res = await fetch(`/api/latest?node_id=${NODE_ID}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        setConnected(true);
+
+        if (data.status === 'no_data') {
+            setConnected(true);
+            document.getElementById('alert-detail').textContent =
+                'No readings received yet';
+            return;
+        }
+
+        updateAlertBanner(data);
+        updateMetricCards(data);
+        updateFaults(data.faults || []);
+        updateStats(data);
+
+        // Reload history charts periodically (every 5 polls)
+        if (!historyLoaded || Math.random() < 0.2) {
+            loadHistory();
+        }
+
+    } catch(e) {
+        setConnected(false);
+        console.error('Poll failed:', e);
+    }
+}
+
+// ============================================================================
+// Alert banner
+// ============================================================================
+function updateAlertBanner(data) {
+    const level = data.overall_alert || 0;
+    const label = data.alert_label || 'NORMAL';
+    const banner = document.getElementById('alert-banner');
+
+    banner.className = `level-${level}`;
+    document.getElementById('alert-label').textContent = label;
+    document.getElementById('alert-time').textContent =
+        data.timestamp_fmt || '—';
+
+    const details = {
+        0: 'All parameters within normal range',
+        1: 'One or more parameters slightly elevated — monitoring',
+        2: 'Multi-parameter anomaly detected — verify water source',
+        3: 'CONFIRMED water quality event — immediate action recommended'
+    };
+    document.getElementById('alert-detail').textContent =
+        details[level] || '';
+}
+
+// ============================================================================
+// Metric cards
+// ============================================================================
+function updateMetricCards(data) {
+    const readings = data.readings || {};
+    const cusum    = data.cusum    || {};
+
+    // Turbidity
+    updateMetric('turb', readings.turbidity_ntu, 'NTU',
+                 cusum.turbidity, '#63b3ed');
+
+    // TDS
+    updateMetric('tds', readings.tds_mgl, 'mg/L',
+                 cusum.tds, '#68d391');
+
+    // Temperature
+    updateMetric('temp', readings.temperature_c, '°C',
+                 cusum.temperature, '#f6ad55');
+}
+
+function updateMetric(prefix, value, unit, cusumState, color) {
+    const valEl      = document.getElementById(`${prefix}-value`);
+    const baselineEl = document.getElementById(`${prefix}-baseline`);
+    const barEl      = document.getElementById(`${prefix}-cusum-bar`);
+    const statusEl   = document.getElementById(`${prefix}-status`);
+
+    if (value === null || value === undefined) {
+        valEl.textContent = '—';
+        return;
+    }
+
+    valEl.textContent = value.toFixed(1);
+
+    if (cusumState) {
+        const mean  = cusumState.baseline_mean;
+        const std   = cusumState.baseline_std;
+        baselineEl.textContent = `Baseline: ${mean?.toFixed(1)} ± ${std?.toFixed(1)}`;
+
+        // CUSUM bar — scale score 0-4.5 to 0-100%
+        const score    = Math.max(cusumState.s_pos || 0, cusumState.s_neg || 0);
+        const pct      = Math.min(100, (score / 4.5) * 100);
+        barEl.style.width = `${pct}%`;
+
+        // Colour bar based on alarm state
+        if (cusumState.alarm_active) {
+            barEl.style.background = 'var(--red)';
+        } else if (pct > 60) {
+            barEl.style.background = 'var(--orange)';
+        } else {
+            barEl.style.background = color;
+        }
+
+        // Status text
+        const alarms = cusumState.consecutive_alarms || 0;
+        if (alarms >= 3) {
+            statusEl.textContent = '● CONFIRMED ALARM';
+            statusEl.className = 'metric-status status-alarm';
+        } else if (alarms >= 1 || cusumState.alarm_active) {
+            statusEl.textContent = '● Warning';
+            statusEl.className = 'metric-status status-warning';
+        } else if (pct > 60) {
+            statusEl.textContent = '● Watch';
+            statusEl.className = 'metric-status status-watch';
+        } else {
+            statusEl.textContent = '● Normal';
+            statusEl.className = 'metric-status status-normal';
+        }
+    }
+}
+
+// ============================================================================
+// Faults
+// ============================================================================
+function updateFaults(faults) {
+    const el = document.getElementById('fault-list');
+    if (!faults || faults.length === 0) {
+        el.innerHTML = '<span class="no-faults">✓ No faults detected</span>';
+        return;
+    }
+    el.innerHTML = faults.map(f =>
+        `<span class="fault-tag">⚠ ${f}</span>`
+    ).join('');
+}
+
+// ============================================================================
+// Stats bar and alert log (loaded separately for performance)
+// ============================================================================
+function updateStats(data) {
+    document.getElementById('stat-node').textContent =
+        data.node_id || '—';
+    document.getElementById('stat-count').textContent =
+        (data.total_readings || 0).toLocaleString();
+    document.getElementById('stat-battery').textContent =
+        data.readings?.battery_mv
+            ? `${data.readings.battery_mv} mV`
+            : '—';
+    document.getElementById('stat-season').textContent =
+        data.readings?.season_name || '—';
+    document.getElementById('stat-updated').textContent =
+        new Date().toLocaleTimeString();
+}
+
+async function loadAlerts() {
+    try {
+        const res = await fetch(`/api/alerts?node_id=${NODE_ID}&limit=20`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const tbody = document.getElementById('alert-tbody');
+
+        if (!data.alerts || data.alerts.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7"
+                style="color:var(--text-dim); text-align:center; padding:16px">
+                No alerts logged yet</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = data.alerts.map(a => `
+            <tr>
+                <td>${a.timestamp_fmt || '—'}</td>
+                <td>${(a.parameter || '').toUpperCase()}</td>
+                <td><span class="alert-level-badge badge-${a.alert_level}">
+                    ${['NONE','WATCH','WARNING','CONFIRMED'][a.alert_level] || '?'}
+                </span></td>
+                <td>${a.value_at_alert !== null
+                    ? Number(a.value_at_alert).toFixed(2) : '—'}</td>
+                <td>${a.baseline_mean !== null
+                    ? Number(a.baseline_mean).toFixed(2) : '—'}</td>
+                <td>${a.cusum_score !== null
+                    ? Number(a.cusum_score).toFixed(2) : '—'}</td>
+                <td>${a.sms_sent ? '✓ Sent' : '—'}</td>
+            </tr>
+        `).join('');
+    } catch(e) {
+        console.error('Alerts fetch failed:', e);
+    }
+}
+
+// ============================================================================
+// Connection indicator
+// ============================================================================
+function setConnected(ok) {
+    const dot  = document.getElementById('connection-dot');
+    const text = document.getElementById('connection-text');
+    dot.className  = ok ? 'connected' : 'error';
+    text.textContent = ok ? 'Live' : 'Connection lost';
+}
+
+// ============================================================================
+// Start
+// ============================================================================
+document.addEventListener('DOMContentLoaded', () => {
+    initCharts();
+    pollLatest();
+    loadHistory();
+    loadAlerts();
+
+    // Poll latest every POLL_INTERVAL seconds
+    setInterval(pollLatest, POLL_INTERVAL);
+
+    // Reload history every 5 minutes
+    setInterval(loadHistory, 5 * 60 * 1000);
+
+    // Reload alert log every 2 minutes
+    setInterval(loadAlerts, 2 * 60 * 1000);
+});
+</script>
+
+</body>
+</html>
